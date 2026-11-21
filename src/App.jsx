@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, BadgeCheck, Building2, CalendarDays,
   Check, CheckCircle2, ChevronDown, CircleAlert, Clock3, Database, ExternalLink, FileText,
@@ -20,6 +20,7 @@ const NAV_ITEMS = [
 ];
 
 const EMPTY_WORKSPACE = { version: 1, businesses: [], ads: [], sources: [], matches: [], dismissedMatches: [], isDemo: false };
+const TABLE_PAGE_SIZE = 100;
 
 function cx(...items) { return items.filter(Boolean).join(' '); }
 function locationOf(item) { return [item.city, item.state].filter(Boolean).join(', ') || item.address || item.country || 'Location not supplied'; }
@@ -101,8 +102,16 @@ function FilterSelect({ label, value, onChange, options }) {
   return <label className="filter-select"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></label>;
 }
 
-function BusinessTable({ records, onOpen }) {
-  if (!records.length) return <EmptyState icon={Building2} title="No business records match" description="Adjust the filters or import a file with business data." />;
+function TablePagination({ total, page, onPageChange }) {
+  const pageCount = Math.ceil(total / TABLE_PAGE_SIZE);
+  if (pageCount <= 1) return null;
+  const first = (page - 1) * TABLE_PAGE_SIZE + 1;
+  const last = Math.min(page * TABLE_PAGE_SIZE, total);
+  return <nav className="table-pagination" aria-label="Table pages"><span>Showing {formatCount(first)}–{formatCount(last)} of {formatCount(total)}</span><div><button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>Previous</button><span>Page {page} of {formatCount(pageCount)}</span><button type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>Next</button></div></nav>;
+}
+
+function BusinessTable({ records, onOpen, emptyDescription, onImport }) {
+  if (!records.length) return <EmptyState icon={Building2} title="No business records match" description={emptyDescription} action={<button className="button button-primary button-small" type="button" onClick={onImport}><Upload size={14} />Import authorized data</button>} />;
   return (
     <div className="table-scroll"><table className="data-table business-table">
       <thead><tr><th>Business</th><th>Location</th><th>Touchpoints</th><th>Profile & reviews</th><th>Source rights</th><th aria-label="Actions" /></tr></thead>
@@ -126,8 +135,8 @@ function BusinessTable({ records, onOpen }) {
   );
 }
 
-function AdsTable({ records, activeCounts }) {
-  if (!records.length) return <EmptyState icon={Megaphone} title="No ad records match" description="Adjust the filters or import an authorized ad-research file." />;
+function AdsTable({ records, activeCounts, emptyDescription, onImport }) {
+  if (!records.length) return <EmptyState icon={Megaphone} title="No ad records match" description={emptyDescription} action={<button className="button button-primary button-small" type="button" onClick={onImport}><Upload size={14} />Import authorized data</button>} />;
   return (
     <div className="table-scroll"><table className="data-table ads-table">
       <thead><tr><th>Advertiser & creative</th><th>Delivery details</th><th>Activity signal</th><th>Reference</th><th>Source rights</th></tr></thead>
@@ -185,6 +194,10 @@ export default function App() {
   const [businessFilters, setBusinessFilters] = useState({ country: 'All', state: 'All', city: 'All', website: 'All', email: 'All', export: 'All' });
   const [adFilters, setAdFilters] = useState({ country: 'All', city: 'All', status: 'All' });
   const [toastTimer, setToastTimer] = useState(null);
+  const [businessPage, setBusinessPage] = useState(1);
+  const [adPage, setAdPage] = useState(1);
+  const deferredQuery = useDeferredValue(query);
+  const normalizedQuery = deferredQuery.trim().toLowerCase();
 
   useEffect(() => {
     let active = true;
@@ -212,6 +225,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', focusSearch);
   }, []);
   useEffect(() => () => { if (toastTimer) clearTimeout(toastTimer); }, [toastTimer]);
+  useEffect(() => { setBusinessPage(1); }, [normalizedQuery, businessFilters, workspace.businesses]);
+  useEffect(() => { setAdPage(1); }, [normalizedQuery, adFilters, workspace.ads]);
 
   const notify = (message) => {
     setToast(message);
@@ -221,39 +236,46 @@ export default function App() {
   };
 
   const suggestions = useMemo(() => buildSuggestions(workspace.businesses, workspace.ads, workspace.matches, workspace.dismissedMatches), [workspace.businesses, workspace.ads, workspace.matches, workspace.dismissedMatches]);
-  const activeAds = workspace.ads.filter((ad) => ad.status === 'Active');
-  const activeCounts = workspace.ads.reduce((out, ad) => { if (ad.status === 'Active') out[ad.name] = (out[ad.name] || 0) + 1; return out; }, {});
-  const exportableBusinesses = workspace.businesses.filter(isExportable);
-  const exportableAds = workspace.ads.filter(isExportable);
+  const activeAds = useMemo(() => workspace.ads.filter((ad) => ad.status === 'Active'), [workspace.ads]);
+  const activeCounts = useMemo(() => workspace.ads.reduce((out, ad) => { if (ad.status === 'Active') out[ad.name] = (out[ad.name] || 0) + 1; return out; }, {}), [workspace.ads]);
+  const exportableBusinesses = useMemo(() => workspace.businesses.filter(isExportable), [workspace.businesses]);
+  const exportableAds = useMemo(() => workspace.ads.filter(isExportable), [workspace.ads]);
   const sources = workspace.sources || [];
 
   const distinctOptions = (items, key) => [...new Set(items.map((item) => item[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const countries = distinctOptions(workspace.businesses, 'country');
-  const states = distinctOptions(workspace.businesses.filter((item) => businessFilters.country === 'All' || item.country === businessFilters.country), 'state');
-  const cities = distinctOptions(workspace.businesses.filter((item) => (businessFilters.country === 'All' || item.country === businessFilters.country) && (businessFilters.state === 'All' || item.state === businessFilters.state)), 'city');
-  const adCountries = distinctOptions(workspace.ads, 'country');
-  const adCities = distinctOptions(workspace.ads.filter((item) => adFilters.country === 'All' || item.country === adFilters.country), 'city');
+  const countries = useMemo(() => distinctOptions(workspace.businesses, 'country'), [workspace.businesses]);
+  const states = useMemo(() => distinctOptions(workspace.businesses.filter((item) => businessFilters.country === 'All' || item.country === businessFilters.country), 'state'), [workspace.businesses, businessFilters.country]);
+  const cities = useMemo(() => distinctOptions(workspace.businesses.filter((item) => (businessFilters.country === 'All' || item.country === businessFilters.country) && (businessFilters.state === 'All' || item.state === businessFilters.state)), 'city'), [workspace.businesses, businessFilters.country, businessFilters.state]);
+  const adCountries = useMemo(() => distinctOptions(workspace.ads, 'country'), [workspace.ads]);
+  const adCities = useMemo(() => distinctOptions(workspace.ads.filter((item) => adFilters.country === 'All' || item.country === adFilters.country), 'city'), [workspace.ads, adFilters.country]);
 
-  const filteredBusinesses = workspace.businesses.filter((item) => {
-    const searchable = cleanSearch(item);
-    return (!query || searchable.includes(query.toLowerCase()))
-      && (businessFilters.country === 'All' || item.country === businessFilters.country)
+  const filteredBusinesses = useMemo(() => workspace.businesses.filter((item) => {
+    if (normalizedQuery && !cleanSearch(item).includes(normalizedQuery)) return false;
+    return (businessFilters.country === 'All' || item.country === businessFilters.country)
       && (businessFilters.state === 'All' || item.state === businessFilters.state)
       && (businessFilters.city === 'All' || item.city === businessFilters.city)
       && (businessFilters.website === 'All' || (businessFilters.website === 'Yes' ? Boolean(item.website) : !item.website))
       && (businessFilters.email === 'All' || (businessFilters.email === 'Yes' ? Boolean(item.email) : !item.email))
       && (businessFilters.export === 'All' || (businessFilters.export === 'Yes' ? isExportable(item) : !isExportable(item)));
-  });
-  const filteredAds = workspace.ads.filter((item) => (!query || cleanSearch(item).includes(query.toLowerCase()))
+  }), [workspace.businesses, normalizedQuery, businessFilters]);
+  const filteredAds = useMemo(() => workspace.ads.filter((item) => (!normalizedQuery || cleanSearch(item).includes(normalizedQuery))
     && (adFilters.country === 'All' || item.country === adFilters.country)
     && (adFilters.city === 'All' || item.city === adFilters.city)
-    && (adFilters.status === 'All' || item.status === adFilters.status));
-  const visibleSuggestions = suggestions.filter((item) => (!query || cleanSearch({ ...item.business, ...item.ad }).includes(query.toLowerCase())));
-  const filteredMatches = workspace.matches.filter((match) => {
+    && (adFilters.status === 'All' || item.status === adFilters.status)), [workspace.ads, normalizedQuery, adFilters]);
+  const visibleSuggestions = useMemo(() => suggestions.filter((item) => (!normalizedQuery || cleanSearch({ ...item.business, ...item.ad }).includes(normalizedQuery))), [suggestions, normalizedQuery]);
+  const filteredMatches = useMemo(() => workspace.matches.filter((match) => {
     const business = workspace.businesses.find((item) => item.id === match.businessId);
     const ad = workspace.ads.find((item) => item.id === match.adId);
-    return business && ad && (!query || cleanSearch({ ...business, ...ad }).includes(query.toLowerCase()));
-  });
+    return business && ad && (!normalizedQuery || cleanSearch({ ...business, ...ad }).includes(normalizedQuery));
+  }), [workspace.matches, workspace.businesses, workspace.ads, normalizedQuery]);
+  const businessPageRecords = filteredBusinesses.slice((businessPage - 1) * TABLE_PAGE_SIZE, businessPage * TABLE_PAGE_SIZE);
+  const adPageRecords = filteredAds.slice((adPage - 1) * TABLE_PAGE_SIZE, adPage * TABLE_PAGE_SIZE);
+  const businessEmptyDescription = normalizedQuery
+    ? `No imported business matches “${deferredQuery}” under the current filters. LocalScope searches this browser only; it does not query Google Maps. Import an authorized file that contains those records.`
+    : 'No imported business records match the current filters. LocalScope does not fetch Google Maps results; import a data file you are authorized to store and export.';
+  const adEmptyDescription = normalizedQuery
+    ? `No imported ad record matches “${deferredQuery}” under the current filters. LocalScope searches this browser only; it does not query Meta Ad Library. Import an authorized ad-research file.`
+    : 'No imported ad records match the current filters. LocalScope does not fetch Meta Ad Library results; import an authorized ad-research file.';
 
   const openImport = (kind = 'business') => { setImportKind(kind); setImportOpen(true); setMobileNavOpen(false); };
   const handleImport = ({ kind, source, records, rejected, truncated }) => {
@@ -416,16 +438,16 @@ export default function App() {
 
           {activePage === 'businesses' && <>
             <PageHeader eyebrow="BUSINESS RECORDS" title="Businesses" description="Filter only the data you imported. Profile, review and contact fields are source-reported—not live-verified." action={<div className="header-actions"><ExportButton count={filteredBusinesses.filter(isExportable).length} excluded={filteredBusinesses.length - filteredBusinesses.filter(isExportable).length} onClick={downloadBusinesses} /><button className="button button-primary" onClick={() => openImport('business')}><Plus size={16} />Import businesses</button></div>} />
-            <div className="table-toolbar"><div className="search-field"><Search size={16} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search businesses, contacts, source fields…" /><kbd>⌘ K</kbd></div><div className="filter-group"><span className="filter-intro"><Filter size={14} /> FILTERS</span><FilterSelect label="Country" value={businessFilters.country} onChange={(value) => setBusinessFilters((current) => ({ ...current, country: value, state: 'All', city: 'All' }))} options={[{ value: 'All', label: 'All countries' }, ...countries.map((value) => ({ value, label: value }))]} /><FilterSelect label="State" value={businessFilters.state} onChange={(value) => setBusinessFilters((current) => ({ ...current, state: value, city: 'All' }))} options={[{ value: 'All', label: 'All states' }, ...states.map((value) => ({ value, label: value }))]} /><FilterSelect label="City" value={businessFilters.city} onChange={(value) => setBusinessFilters((current) => ({ ...current, city: value }))} options={[{ value: 'All', label: 'All cities' }, ...cities.map((value) => ({ value, label: value }))]} /></div></div>
+            <div className="table-toolbar"><div className="search-field"><Search size={16} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search imported businesses…" /><kbd>⌘ K</kbd></div><div className="filter-group"><span className="filter-intro"><Filter size={14} /> FILTERS</span><FilterSelect label="Country" value={businessFilters.country} onChange={(value) => setBusinessFilters((current) => ({ ...current, country: value, state: 'All', city: 'All' }))} options={[{ value: 'All', label: 'All countries' }, ...countries.map((value) => ({ value, label: value }))]} /><FilterSelect label="State" value={businessFilters.state} onChange={(value) => setBusinessFilters((current) => ({ ...current, state: value, city: 'All' }))} options={[{ value: 'All', label: 'All states' }, ...states.map((value) => ({ value, label: value }))]} /><FilterSelect label="City" value={businessFilters.city} onChange={(value) => setBusinessFilters((current) => ({ ...current, city: value }))} options={[{ value: 'All', label: 'All cities' }, ...cities.map((value) => ({ value, label: value }))]} /></div></div>
             <div className="secondary-filters"><FilterSelect label="Website" value={businessFilters.website} onChange={(value) => setBusinessFilters((current) => ({ ...current, website: value }))} options={[{ value: 'All', label: 'Any website' }, { value: 'Yes', label: 'Website supplied' }, { value: 'No', label: 'No website supplied' }]} /><FilterSelect label="Email" value={businessFilters.email} onChange={(value) => setBusinessFilters((current) => ({ ...current, email: value }))} options={[{ value: 'All', label: 'Any email status' }, { value: 'Yes', label: 'Email supplied' }, { value: 'No', label: 'No email supplied' }]} /><FilterSelect label="Export rights" value={businessFilters.export} onChange={(value) => setBusinessFilters((current) => ({ ...current, export: value }))} options={[{ value: 'All', label: 'All rights statuses' }, { value: 'Yes', label: 'Export permitted' }, { value: 'No', label: 'Restricted / unknown' }]} /><span className="results-count">{formatCount(filteredBusinesses.length)} records</span></div>
-            <section className="panel data-panel"><div className="data-panel-head"><div><strong>Business records</strong><span>Only rows with storage and export rights are included in CSV.</span></div><span className="table-source-note"><LockKeyhole size={13} />Local workspace</span></div><BusinessTable records={filteredBusinesses} onOpen={setSelectedRecord} /><div className="table-footnote"><CircleAlert size={14} />Ratings, review counts, contact details and profile presence are imported claims; verify before relying on them.</div></section>
+            <section className="panel data-panel"><div className="data-panel-head"><div><strong>Business records</strong><span>Only rows with storage and export rights are included in CSV.</span></div><span className="table-source-note"><LockKeyhole size={13} />Local workspace</span></div><BusinessTable records={businessPageRecords} onOpen={setSelectedRecord} emptyDescription={businessEmptyDescription} onImport={() => openImport('business')} /><TablePagination total={filteredBusinesses.length} page={businessPage} onPageChange={setBusinessPage} /><div className="table-footnote"><CircleAlert size={14} />Ratings, review counts, contact details and profile presence are imported claims; verify before relying on them.</div></section>
           </>}
 
           {activePage === 'ads' && <>
             <PageHeader eyebrow="AD RESEARCH RECORDS" title="Ad records" description="Review user-supplied ad listings and descriptive activity signals—not campaign performance." action={<div className="header-actions"><ExportButton count={filteredAds.filter(isExportable).length} excluded={filteredAds.length - filteredAds.filter(isExportable).length} onClick={downloadAds} /><button className="button button-primary" onClick={() => openImport('ad')}><Plus size={16} />Import ads</button></div>} />
             <div className="ad-metric-row"><div><span className="metric-label">ACTIVE RECORDS</span><strong>{formatCount(filteredAds.filter((ad) => ad.status === 'Active').length)}</strong><small>as marked in the imported file</small></div><div><span className="metric-label">ADVERTISERS</span><strong>{formatCount(new Set(filteredAds.map((ad) => ad.name)).size)}</strong><small>unique names in current view</small></div><div><span className="metric-label">CREATIVE VARIANTS</span><strong>{formatCount(filteredAds.length)}</strong><small>record count only—not spend or reach</small></div><div className="metric-disclaimer"><Activity size={16} /><span>“Campaign significance” is limited to supplied status, start date and creative count. No performance inference is made.</span></div></div>
-            <div className="table-toolbar ads-toolbar"><div className="search-field"><Search size={16} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search advertiser, copy, IDs…" /><kbd>⌘ K</kbd></div><div className="filter-group"><span className="filter-intro"><Filter size={14} /> FILTERS</span><FilterSelect label="Country" value={adFilters.country} onChange={(value) => setAdFilters((current) => ({ ...current, country: value, city: 'All' }))} options={[{ value: 'All', label: 'All countries' }, ...adCountries.map((value) => ({ value, label: value }))]} /><FilterSelect label="City (from file)" value={adFilters.city} onChange={(value) => setAdFilters((current) => ({ ...current, city: value }))} options={[{ value: 'All', label: 'All supplied cities' }, ...adCities.map((value) => ({ value, label: value }))]} /><FilterSelect label="Status" value={adFilters.status} onChange={(value) => setAdFilters((current) => ({ ...current, status: value }))} options={[{ value: 'All', label: 'All statuses' }, { value: 'Active', label: 'Active' }, { value: 'Inactive', label: 'Inactive' }, { value: 'Unknown', label: 'Unknown' }]} /></div></div>
-            <section className="panel data-panel"><div className="data-panel-head"><div><strong>Ad listings</strong><span>City, status, start date and links are shown only when included by your source.</span></div><span className="table-source-note"><LockKeyhole size={13} />Imported data only</span></div><AdsTable records={filteredAds} activeCounts={activeCounts} /><div className="table-footnote"><CircleAlert size={14} />No city-level Meta search, commercial spend, impressions, reach or ROI is fetched by this local app.</div></section>
+            <div className="table-toolbar ads-toolbar"><div className="search-field"><Search size={16} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search imported ad records…" /><kbd>⌘ K</kbd></div><div className="filter-group"><span className="filter-intro"><Filter size={14} /> FILTERS</span><FilterSelect label="Country" value={adFilters.country} onChange={(value) => setAdFilters((current) => ({ ...current, country: value, city: 'All' }))} options={[{ value: 'All', label: 'All countries' }, ...adCountries.map((value) => ({ value, label: value }))]} /><FilterSelect label="City (from file)" value={adFilters.city} onChange={(value) => setAdFilters((current) => ({ ...current, city: value }))} options={[{ value: 'All', label: 'All supplied cities' }, ...adCities.map((value) => ({ value, label: value }))]} /><FilterSelect label="Status" value={adFilters.status} onChange={(value) => setAdFilters((current) => ({ ...current, status: value }))} options={[{ value: 'All', label: 'All statuses' }, { value: 'Active', label: 'Active' }, { value: 'Inactive', label: 'Inactive' }, { value: 'Unknown', label: 'Unknown' }]} /></div></div>
+            <section className="panel data-panel"><div className="data-panel-head"><div><strong>Ad listings</strong><span>City, status, start date and links are shown only when included by your source.</span></div><span className="table-source-note"><LockKeyhole size={13} />Imported data only</span></div><AdsTable records={adPageRecords} activeCounts={activeCounts} emptyDescription={adEmptyDescription} onImport={() => openImport('ad')} /><TablePagination total={filteredAds.length} page={adPage} onPageChange={setAdPage} /><div className="table-footnote"><CircleAlert size={14} />No city-level Meta search, commercial spend, impressions, reach or ROI is fetched by this local app.</div></section>
           </>}
 
           {activePage === 'matches' && <>

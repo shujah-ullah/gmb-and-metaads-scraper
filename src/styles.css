@@ -189,6 +189,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .secondary-filters { display: flex; align-items: center; gap: 7px; margin: -1px 0 12px; }
 .secondary-filters .filter-select { min-width: 148px; }
 .results-count { margin-left: auto; color: #8d999d; font-size: 9px; }
+.table-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 14px; border-top: 1px solid #eff2f2; color: #879598; font-size: 8px; }
+.table-pagination > div { display: flex; align-items: center; gap: 8px; }
+.table-pagination button { padding: 5px 8px; border: 1px solid #e4eaea; border-radius: 5px; color: #52666a; background: #fff; font: inherit; cursor: pointer; }
+.table-pagination button:disabled { opacity: .45; cursor: not-allowed; }
 .data-panel { overflow: hidden; }
 .data-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #eff2f2; }
 .data-panel-head > div { display: flex; flex-direction: column; gap: 4px; }
